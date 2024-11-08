@@ -45,6 +45,7 @@
   "scripts": {
     "prebuild": "rimraf dist && npm run typegen",
     "build": "rollup -c && npm run copy",
+    "build:watch": "nodemon --watch src --ext ts --exec npm run build",
     "prepare": "npm run build && husky install",
     "eslint": "eslint --fix .",
     "eslint:ci": "eslint .",
@@ -101,6 +102,7 @@
     "jest": "^26.4.1",
     "json": "^11.0.0",
     "lil-gui": "^0.19.2",
+    "nodemon": "^3.1.7",
     "prettier": "^2.4.1",
     "pretty-quick": "^3.1.0",
     "raw-loader": "^4.0.2",

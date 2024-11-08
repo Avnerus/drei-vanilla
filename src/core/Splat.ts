@@ -28,6 +28,7 @@ export type TargetMesh = THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderM
 export type SharedState = {
   url: string
   gl: THREE.WebGLRenderer
+  viewportGl?: THREE.WebGLRenderer
   worker: Worker
   manager: THREE.LoadingManager
   stream: ReadableStreamDefaultReader<Uint8Array>
@@ -222,12 +223,14 @@ function createWorker(self: any) {
 export class SplatLoader extends THREE.Loader {
   // WebGLRenderer, needs to be filled out!
   gl: THREE.WebGLRenderer
+  viewportGl: THREE.WebGLRenderer | undefined
   // Default chunk size for lazy loading
   chunkSize: number
 
-  constructor(gl: THREE.WebGLRenderer, chunkSize = 25000) {
+  constructor(gl: THREE.WebGLRenderer, viewportGl: THREE.WebGLRenderer | undefined, chunkSize = 25000) {
     super()
     this.gl = gl
+    this.viewportGl = viewportGl
     this.chunkSize = chunkSize
   }
 
@@ -243,6 +246,7 @@ export class SplatLoader extends THREE.Loader {
   ) {
     const shared = {
       gl: this.gl,
+      viewportGl: this.viewportGl,
       url: this.manager.resolveURL(url),
       worker: new Worker(
         URL.createObjectURL(
@@ -492,7 +496,6 @@ function connect(shared: SharedState, target: TargetMesh) {
 }
 
 function pushDataBuffer(shared: SharedState, buffer: ArrayBufferLike, vertexCount: number) {
-  const context = shared.gl.getContext()
   if (shared.loadedVertexCount + vertexCount > shared.maxVertexes) {
     vertexCount = shared.maxVertexes - shared.loadedVertexCount
   }
@@ -577,38 +580,41 @@ function pushDataBuffer(shared: SharedState, buffer: ArrayBufferLike, vertexCoun
       height = 1
     }
 
-    const centerAndScaleTextureProperties = shared.gl.properties.get(shared.centerAndScaleTexture)
-    context.bindTexture(context.TEXTURE_2D, centerAndScaleTextureProperties.__webglTexture)
-    context.texSubImage2D(
-      context.TEXTURE_2D,
-      0,
-      xoffset,
-      yoffset,
-      width,
-      height,
-      context.RGBA,
-      context.FLOAT,
-      shared.centerAndScaleData,
-      shared.loadedVertexCount * 4
-    )
+    const renderers = shared.viewportGl ? [shared.gl, shared.viewportGl] : [shared.gl]
+    for (const gl of renderers) {
+      const context = gl.getContext()
+      const centerAndScaleTextureProperties = gl.properties.get(shared.centerAndScaleTexture)
+      context.bindTexture(context.TEXTURE_2D, centerAndScaleTextureProperties.__webglTexture)
+      context.texSubImage2D(
+        context.TEXTURE_2D,
+        0,
+        xoffset,
+        yoffset,
+        width,
+        height,
+        context.RGBA,
+        context.FLOAT,
+        shared.centerAndScaleData,
+        shared.loadedVertexCount * 4
+      )
 
-    const covAndColorTextureProperties = shared.gl.properties.get(shared.covAndColorTexture)
-    context.bindTexture(context.TEXTURE_2D, covAndColorTextureProperties.__webglTexture)
-    context.texSubImage2D(
-      context.TEXTURE_2D,
-      0,
-      xoffset,
-      yoffset,
-      width,
-      height,
-      // @ts-ignore
-      context.RGBA_INTEGER,
-      context.UNSIGNED_INT,
-      shared.covAndColorData,
-      shared.loadedVertexCount * 4
-    )
-    shared.gl.resetState()
-
+      const covAndColorTextureProperties = gl.properties.get(shared.covAndColorTexture)
+      context.bindTexture(context.TEXTURE_2D, covAndColorTextureProperties.__webglTexture)
+      context.texSubImage2D(
+        context.TEXTURE_2D,
+        0,
+        xoffset,
+        yoffset,
+        width,
+        height,
+        // @ts-ignore
+        context.RGBA_INTEGER,
+        context.UNSIGNED_INT,
+        shared.covAndColorData,
+        shared.loadedVertexCount * 4
+      )
+      gl.resetState()
+    }
     shared.loadedVertexCount += width * height
     vertexCount -= width * height
   }
@@ -620,7 +626,15 @@ export class Splat extends THREE.Mesh {
     super()
 
     this.frustumCulled = false
-    this.onBeforeRender = () => shared.update(this, camera, alphaHash)
+    this.onBeforeRender = (renderer) => {
+      if (renderer == shared.gl) {
+        if (shared.viewportGl) {
+          // Restore the modelView matrix after the viewport renderer
+          this.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, this.matrixWorld)
+        }
+        shared.update(this, camera, alphaHash)
+      }
+    }
     this.material = new SplatMaterial()
     Object.assign(this.material, {
       transparent: !alphaHash,
